@@ -4,9 +4,8 @@ import numpy as np
 import random
 import cv2
 import time
-from tqdm import tqdm
 
-import open3d as o3d
+from tqdm import tqdm
 
 np.random.seed(1428) # do not change this seed
 random.seed(1428) # do not change this seed
@@ -38,7 +37,6 @@ def pnpsolver(query, model, cameraMatrix=0, distortion=0):  #query: ([XY1, XY2, 
     query: (kp_query, desc_query) from the query image  (2D keypoints & descriptors)
     model: (kp_model, desc_model) from the 3D model (3D points & descriptors)
     """
-    # kp_query, desc_query, corres_3d_query = query
     kp_query, desc_query = query
     kp_model, desc_model = model
     cameraMatrix = np.array([[1868.27, 0, 540],
@@ -49,14 +47,13 @@ def pnpsolver(query, model, cameraMatrix=0, distortion=0):  #query: ([XY1, XY2, 
     # --- Step 1: 建立匹配器並進行 knn 比對 (k=2)
     bf = cv2.BFMatcher(cv2.NORM_L2)
     matches = bf.knnMatch(desc_query, desc_model, k=2)
-    # print(f"matches: {type(matches)}")
+    print(f"matches: {type(matches)}")
 
     # --- Step 2: Ratio Test (Lowe’s ratio test)
     good_matches = []
     for m, n in matches:  # 2nd good is for removing faked match
         if m.distance < 0.75 * n.distance:
             good_matches.append(m)
-    # print("matches: ", good_matches)
 
     if len(good_matches) < 6:
         # 太少匹配無法求解
@@ -157,101 +154,9 @@ def quadrangular(R, T, scale=0.1):
     corners = (R.T @ pts_cam.T).T + apex.reshape(1, 3)
     return apex, corners
 
-
-def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
+def visualization(Camera2World_Transform_Matrixs, points3D_df):
     #TODO: visualize the camera pose
-    # pass
-    """
-    Visualize 3D points and camera pyramids using Open3D.
-    Arguments:
-        Camera2World_Transform_Matrixs: list of (4x4) np.ndarray
-        points3D_df: pandas DataFrame with 3D points (columns: XYZ or X,Y,Z)
-        scale: size of each camera pyramid
-    """
-    geometries = []
-    # --- 1. 3D points (gray point cloud) ---
-    pts = np.array(points3D_df['XYZ'].to_list())
-    # print("#####", points3D_df['RGB'].to_list(), "!!!!!")
-    rgb = np.array(points3D_df["RGB"].to_list())
-    if pts.size > 0:
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pts)
-        # gray = np.ones_like(pts) * 0.6              # np.array([[0.6,0.6,0.6], [0.6,0.6,0.6], ...])  pts.size * 3
-        pcd.colors = o3d.utility.Vector3dVector(rgb)
-        geometries.append(pcd)
-
-    # --- 2. Camera pyramids ---
-    for i, mat in enumerate(Camera2World_Transform_Matrixs):
-        mat = np.asarray(mat)
-        # Extract rotation and translation (camera pose)
-        R_c2w = mat[:3, :3]
-        C = mat[:3, 3].reshape(3, 1)
-        R = R_c2w.T
-        T = -R @ C
-        
-        apex, corners = quadrangular(R, T, scale=scale)
-        # Combine apex and corners into a mesh pyramid
-        vertices = np.vstack([apex, corners])  # apex=0, corners=4
-        bottom_triangles = np.array([
-            [1, 2, 3],
-            [1, 3, 4],
-            [3, 2, 1],
-            [4, 3, 1]
-        ])
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(vertices)
-        mesh.triangles = o3d.utility.Vector3iVector(bottom_triangles)
-        mesh.paint_uniform_color([0.6, 0.8, 1.0])
-        mesh.compute_vertex_normals()
-        geometries.append(mesh)
-        lines = np.array([
-            [0, 1],
-            [0, 2],
-            [0, 3],
-            [0, 4],
-            [1, 2],
-            [2, 3],
-            [3, 4],
-            [4, 1],
-        ])
-        line_colors = [[0.2, 0.6, 1.0] for _ in range(len(lines))]
-        line_set = o3d.geometry.LineSet()
-        line_set.points = o3d.utility.Vector3dVector(vertices)
-        line_set.lines = o3d.utility.Vector2iVector(lines)
-        line_set.colors = o3d.utility.Vector3dVector(line_colors)
-        geometries.append(line_set)
-
-        # Add camera center (red sphere)
-        cam_center = o3d.geometry.TriangleMesh.create_sphere(radius=scale * 0.05)
-        cam_center.paint_uniform_color([1, 0, 0])
-        cam_center.translate(apex)
-        geometries.append(cam_center)
-
-        # Add direction arrow (camera forward axis)
-        z_axis = o3d.geometry.TriangleMesh.create_arrow(
-            cone_radius=scale * 0.05,
-            cone_height=scale * 0.2,
-            cylinder_radius=scale * 0.02,
-            cylinder_height=scale * 1.1 #0.3
-        )
-        z_axis.paint_uniform_color([1, 0, 0])
-        z_axis.rotate(R_c2w, center=(0, 0, 0))
-        z_axis.translate(C.flatten())
-        geometries.append(z_axis)
-
-    # o3d.io.write_point_cloud("scene_points.ply", pcd)
-    # o3d.io.write_triangle_mesh("scene_mesh.ply", mesh)
-    # geometries.append(line_set)  geometries.append(cam_center)   geometries.append(z_axis)  # store to .ply
-
-    # --- visualize all geometries ---
-    o3d.visualization.draw_geometries(
-        geometries,
-        window_name="Camera Pyramids & 3D Points",
-        width=1200,
-        height=800,
-        mesh_show_back_face=True
-    )
-
+    pass
 
 if __name__ == "__main__":
     # Load data
@@ -271,8 +176,8 @@ if __name__ == "__main__":
     # print(f"kp_model: {kp_model.shape}\n{kp_model}")  # X, Y, Z
     # print(f"desc_model: {desc_model.shape}\n{desc_model}") # dim = 128 with n(point) = 111519
 
-    # IMAGE_ID_LIST = [200, 201]  ##### ? // 200, 201
-    IMAGE_ID_LIST = list(range(1, 294)) # 1..293 (1,294)
+    # IMAGE_ID_LIST = [200]  ##### ? // 200, 201
+    IMAGE_ID_LIST = list(range(1, 294)) # 1..293
     
     r_list = []
     t_list = []
@@ -284,16 +189,14 @@ if __name__ == "__main__":
         rimg = cv2.imread("data/frames/" + fname, cv2.IMREAD_GRAYSCALE)
 
         # Load query keypoints and descriptors
-        points = point_desc_df.loc[(point_desc_df["IMAGE_ID"] == idx) & (point_desc_df["POINT_ID"] != -1)]  ## get the match points
+        points = point_desc_df.loc[point_desc_df["IMAGE_ID"] == idx]  ## get the match points
         kp_query = np.array(points["XY"].to_list())
-        # corres_3d_query = np.array(points["POINT_ID"].to_list())  ##
         desc_query = np.array(points["DESCRIPTORS"].to_list()).astype(np.float32)
         # print(f"kp_query: {kp_query.shape}\n{kp_query}")
         # print(f"desc_query: {desc_query.shape}\n{desc_query}")
 
         # Find correspondance and solve pnp
         retval, rvec, tvec, inliers = pnpsolver((kp_query, desc_query), (kp_model, desc_model))   # (2D, 3D)
-        # retval, rvec, tvec, inliers = pnpsolver((kp_query, desc_query, corres_3d_query), (kp_model, desc_model))   # (2D, 3D)
         Rot_matrix, _ = cv2.Rodrigues(rvec)
         rotq = R.from_rotvec(rvec.reshape(1,3)).as_quat() # Convert rotation vector to quaternion
         # print("camera posture:\n This is Rotation_matrix:")  # p = K[R|t_vec]w
@@ -329,21 +232,9 @@ if __name__ == "__main__":
     print(f"translation: {np.median(np.array(translation_error_list))}")
 
     # TODO: result visualization
-    # Camera2World_Transform_Matrixs = []
-    # for r, t in zip(r_list, t_list):   ## for i in range(len(r_list)): r= t=
-    #     # TODO: calculate camera pose in world coordinate system  # C = - R.T * t  if [R|t]
-    #     c2w = np.eye(4)
-    #     Camera2World_Transform_Matrixs.append(c2w)
-    # visualization(Camera2World_Transform_Matrixs, points3D_df)
-    
-    
-    Camera2World_Transform_Matrixs = []  ## [[R.T, -(R.T)*t](3*4), [0, 1]] = [[R.T, C], [0, 1]]
-    for rvec, tvec in zip(r_list, t_list): # all pairs (rvec, tvec) in order
-        R_mat, _ = cv2.Rodrigues(rvec)  # rotation matrix
-        tvec = np.asarray(tvec).reshape(3, 1)
-        C = (-R_mat.T @ tvec).flatten()
-        c2w = np.eye(4) #I(4*4)
-        c2w[:3, :3] = R_mat.T
-        c2w[:3, 3] = C  # c2w is a c_to_w_matrix(4*4)
+    Camera2World_Transform_Matrixs = []
+    for r, t in zip(r_list, t_list):
+        # TODO: calculate camera pose in world coordinate system  # C = - R.T * t  if [R|t]
+        c2w = np.eye(4)
         Camera2World_Transform_Matrixs.append(c2w)
-    visualization(Camera2World_Transform_Matrixs, points3D_df, scale=1)  #0.3
+    visualization(Camera2World_Transform_Matrixs, points3D_df)
