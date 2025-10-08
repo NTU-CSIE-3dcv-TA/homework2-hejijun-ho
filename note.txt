@@ -1,0 +1,21 @@
+on ws1
+
+# 1️⃣ 建立排序好的檔案清單
+ls video_materials/valid_img*.jpg | sort -V > img_list.txt
+
+# 2️⃣ 把每行前面加上 file (ffmpeg concat 格式需要)
+awk '{print "file \x27" $0 "\x27"}' img_list.txt > sorted_list.txt
+
+# 3️⃣ 用 ffmpeg 合成影片
+ffmpeg -f concat -safe 0 -i sorted_list.txt -r 30 -pix_fmt yuv420p output.mp4
+
+====================================================
+
+# 1️⃣ 建立排序好的檔案清單
+ls vm_train/train_img*.jpg | sort -V > img_list2.txt
+
+# 2️⃣ 轉成 ffmpeg 可用的格式
+awk '{print "file \x27" $0 "\x27"}' img_list2.txt > sorted_list2.txt
+
+# 3️⃣ 合成影片 output2.mp4
+ffmpeg -f concat -safe 0 -i sorted_list2.txt -r 30 -pix_fmt yuv420p output2.mp4

@@ -7,6 +7,7 @@ import time
 from tqdm import tqdm
 
 import open3d as o3d
+import os
 
 np.random.seed(1428) # do not change this seed
 random.seed(1428) # do not change this seed
@@ -113,8 +114,8 @@ def rotation_error(q1, q2): # q2 is ground truth / q = [x, y, z, w] (w + xi + yj
     len_q1 = len_quaternion(q1)
     len_q2 = len_quaternion(q2)
     # print(f"len: q1<{len_q1}>, q2<{len_q2}>")
-    q1 = q1 / len_q1
-    q2 = q2 / len_q2  ## normalized
+    # q1 = q1 / len_q1
+    # q2 = q2 / len_q2  ## normalized
     
     q1 = -1 * np.array(q1)
     q1[3] = -q1[3]
@@ -172,7 +173,7 @@ def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
     # --- 1. 3D points (gray point cloud) ---
     pts = np.array(points3D_df['XYZ'].to_list())
     # print("#####", points3D_df['RGB'].to_list(), "!!!!!")
-    rgb = np.array(points3D_df["RGB"].to_list())
+    rgb = np.array(points3D_df["RGB"].to_list()) / 255.0
     if pts.size > 0:
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pts)
@@ -181,6 +182,9 @@ def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
         geometries.append(pcd)
 
     # --- 2. Camera pyramids ---
+    trajectory_apex = []
+    trajectory = []
+    trajectory_colors = []
     for i, mat in enumerate(Camera2World_Transform_Matrixs):
         mat = np.asarray(mat)
         # Extract rotation and translation (camera pose)
@@ -190,7 +194,6 @@ def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
         T = -R @ C
         
         apex, corners = quadrangular(R, T, scale=scale)
-        # Combine apex and corners into a mesh pyramid
         vertices = np.vstack([apex, corners])  # apex=0, corners=4
         bottom_triangles = np.array([
             [1, 2, 3],
@@ -238,6 +241,18 @@ def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
         z_axis.rotate(R_c2w, center=(0, 0, 0))
         z_axis.translate(C.flatten())
         geometries.append(z_axis)
+        # add trajectory here
+        trajectory_apex.append(apex)
+        aplength = len(trajectory_apex)
+        if aplength != 1:
+            trajectory.append([aplength-1, aplength-2])            
+            trajectory_colors.append([1, 0, 0])
+    trajectory = np.array(trajectory)
+    trajectory_set = o3d.geometry.LineSet()
+    trajectory_set.points = o3d.utility.Vector3dVector(trajectory_apex)
+    trajectory_set.lines = o3d.utility.Vector2iVector(trajectory)
+    trajectory_set.colors = o3d.utility.Vector3dVector(trajectory_colors)
+    geometries.append(trajectory_set)
 
     # o3d.io.write_point_cloud("scene_points.ply", pcd)
     # o3d.io.write_triangle_mesh("scene_mesh.ply", mesh)
@@ -252,6 +267,39 @@ def visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.5):
         mesh_show_back_face=True
     )
 
+def world2camera2image(c2w, p_world): # c2w: camera to world matrix(4*4), p_world: world coordonate system
+    cameraMatrix = np.array([[1868.27, 0, 540],
+                             [0, 1869.18, 960],
+                             [0, 0, 1]], dtype=np.float32)
+    distCoeffs = np.array([0.0847023, -0.192929, -0.000201144, -0.000725352], dtype=np.float32)
+    # c2w = [R_c2w | t_c2w]   =>  w2c = [R_c2w.T | -R_c2w.T @ t_c2w]
+    R_c2w = c2w[:3, :3]
+    t_c2w = c2w[:3, 3].reshape(3, 1)
+    R_w2c = R_c2w.T
+    t_w2c = -R_w2c @ t_c2w
+    p_world = np.asarray(p_world, dtype=np.float32).reshape(-1, 3)
+    p_cam = (R_w2c @ p_world.T + t_w2c).T  # (N,3)
+    rvec, _ = cv2.Rodrigues(R_w2c)
+    tvec = t_w2c
+    p_img, _ = cv2.projectPoints(p_world, rvec, tvec, cameraMatrix, distCoeffs)
+    p_img = p_img.reshape(-1, 2)
+    return p_img
+
+def sort_depth(c2w, pts_3d, pts_color):  #pts_3d: world coordinate system
+    # deep to shallow (Z in camera coordinate system)
+    pts_3d = np.asarray(pts_3d, dtype=np.float32).reshape(-1, 3)
+    pts_color = np.asarray(pts_color, dtype=np.float32).reshape(-1, 3)
+    R_c2w = c2w[:3, :3]
+    t_c2w = c2w[:3, 3].reshape(3, 1)
+    R_w2c = R_c2w.T
+    t_w2c = -R_w2c @ t_c2w
+    pts_cam = (R_w2c @ pts_3d.T + t_w2c).T
+    depth = pts_cam[:, 2]  # Z values
+    # sort from far (large Z) to near (small Z)
+    sort_idx = np.argsort(-depth)
+    sorted_pts_3d = list(pts_3d[sort_idx])
+    sorted_pts_color = list(pts_color[sort_idx])
+    return sorted_pts_3d, sorted_pts_color
 
 if __name__ == "__main__":
     # Load data
@@ -271,8 +319,19 @@ if __name__ == "__main__":
     # print(f"kp_model: {kp_model.shape}\n{kp_model}")  # X, Y, Z
     # print(f"desc_model: {desc_model.shape}\n{desc_model}") # dim = 128 with n(point) = 111519
 
-    # IMAGE_ID_LIST = [200, 201]  ##### ? // 200, 201
     IMAGE_ID_LIST = list(range(1, 294)) # 1..293 (1,294)
+    IMAGE_ID_LIST = []
+    cnt_img = 0
+    cnt_vimg = 0
+    for index, row in images_df.iterrows():
+        cnt_img += 1
+        if row["NAME"] and row["NAME"][0] == 'v':
+            IMAGE_ID_LIST.append(row["IMAGE_ID"])
+            cnt_vimg += 1
+    # IMAGE_ID_LIST = IMAGE_ID_LIST[30:40]
+    print(f"~~~ n(img): {cnt_img}, n(vimg): {cnt_vimg}")
+    # IMAGE_ID_LIST = [200, 201,202] ### ? // 200, 201
+    # IMAGE_ID_LIST = [200]
     
     r_list = []
     t_list = []
@@ -280,8 +339,8 @@ if __name__ == "__main__":
     translation_error_list = []
     for idx in tqdm(IMAGE_ID_LIST):
         # Load quaery image
-        fname = (images_df.loc[images_df["IMAGE_ID"] == idx])["NAME"].values[0]
-        rimg = cv2.imread("data/frames/" + fname, cv2.IMREAD_GRAYSCALE)
+        # fname = (images_df.loc[images_df["IMAGE_ID"] == idx])["NAME"].values[0]
+        # rimg = cv2.imread("data/frames/" + fname, cv2.IMREAD_GRAYSCALE)
 
         # Load query keypoints and descriptors
         points = point_desc_df.loc[(point_desc_df["IMAGE_ID"] == idx) & (point_desc_df["POINT_ID"] != -1)]  ## get the match points
@@ -346,4 +405,37 @@ if __name__ == "__main__":
         c2w[:3, :3] = R_mat.T
         c2w[:3, 3] = C  # c2w is a c_to_w_matrix(4*4)
         Camera2World_Transform_Matrixs.append(c2w)
-    visualization(Camera2World_Transform_Matrixs, points3D_df, scale=1)  #0.3
+        
+    save_path_c2w = os.path.join(os.getcwd(), "c2w_matrixs.npy")    ################################
+    np.save(save_path_c2w, np.array(Camera2World_Transform_Matrixs))
+    # Camera2World_Transform_Matrixs = list(np.load("c2w_matrixs.npy"))  ################################
+    
+    os.makedirs("data/video_materials", exist_ok=True)
+    # virtual_pts_3d = [(1, 2, 3)]  # video-materials
+    virtual_pts_3d = np.load("cube_transformed_vertices.npy")
+    virtual_pts_color = (np.load("cube_color.npy") * 255)
+    # print("~~~~~", virtual_pts_3d, "~~~~~~")
+    # virtual_pts_3d = vertex2all(virtual_pts_3d)
+    # virtual_pts_color = [(255, 0, 0) for _ in range(len(virtual_pts_3d))]
+    # print("!!! the len of vpts: ", len(virtual_pts_3d))
+    for idx, c2w in tqdm(zip(IMAGE_ID_LIST, Camera2World_Transform_Matrixs), total=len(IMAGE_ID_LIST)):
+        fname = (images_df.loc[images_df["IMAGE_ID"] == idx])["NAME"].values[0]
+        rimg = cv2.imread(f"data/frames/{fname}", cv2.IMREAD_COLOR)
+        virtual_pts_3d, virtual_pts_color = sort_depth(c2w, virtual_pts_3d, virtual_pts_color)
+        # print("@@@@@@@", virtual_pts_3d, "@@@@@@@")
+        
+        h, w = rimg.shape[:2]
+        for pt_3d, color in zip(virtual_pts_3d, virtual_pts_color):
+            # print("@@@@@@@", color, type(color), "@@@@@@@")
+            color = tuple(map(int, np.array(color).flatten()))
+            p_img = world2camera2image(c2w, [pt_3d])
+            p_img = p_img.reshape(-1, 2)
+            for (x, y) in p_img.astype(int):
+                if 0 <= x < w and 0 <= y < h:
+                    cv2.circle(rimg, (x, y), 8, color, -1)
+                # else:
+                    # print(f"Point {(x, y)} out of image bounds for {fname}")
+        out_path = f"data/video_materials/{fname}"
+        cv2.imwrite(out_path, rimg)
+
+    visualization(Camera2World_Transform_Matrixs, points3D_df, scale=0.2)  #0.3
