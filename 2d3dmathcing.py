@@ -55,7 +55,7 @@ def pnpsolver(query, model, cameraMatrix=0, distortion=0):  #query: ([XY1, XY2, 
     # --- Step 2: Ratio Test (Lowe’s ratio test)
     good_matches = []
     for m, n in matches:  # 2nd good is for removing faked match
-        if m.distance < 0.75 * n.distance:
+        if m.distance < 0.3 * n.distance:  # 0.75 0.6 0.3
             good_matches.append(m)
     # print("matches: ", good_matches)
 
@@ -76,16 +76,21 @@ def pnpsolver(query, model, cameraMatrix=0, distortion=0):  #query: ([XY1, XY2, 
     obj_points = np.array(obj_points, dtype=np.float32)
 
     # --- Step 4: 使用 RANSAC 的 solvePnP 求解姿態
-    retval, rvec, tvec, inliers = cv2.solvePnPRansac(  # with ransac
-        objectPoints=obj_points,
-        imagePoints=img_points,
-        cameraMatrix=cameraMatrix,
-        distCoeffs=distCoeffs,
-        iterationsCount=1000,
-        reprojectionError=3.0,
-        confidence=0.999,
-        flags=cv2.SOLVEPNP_ITERATIVE
-    )
+    self_done = False
+    if self_done:
+        self_done = True
+        ################# implement 4 bonus here
+    else:
+        retval, rvec, tvec, inliers = cv2.solvePnPRansac(  # with ransac
+            objectPoints=obj_points,
+            imagePoints=img_points,
+            cameraMatrix=cameraMatrix,
+            distCoeffs=distCoeffs,
+            iterationsCount=1000,
+            reprojectionError=3.0,
+            confidence=0.999,
+            flags=cv2.SOLVEPNP_ITERATIVE
+        )
 
     if not retval:
         return None, None, None, None
@@ -114,6 +119,9 @@ def rotation_error(q1, q2): # q2 is ground truth / q = [x, y, z, w] (w + xi + yj
     len_q1 = len_quaternion(q1)
     len_q2 = len_quaternion(q2)
     # print(f"len: q1<{len_q1}>, q2<{len_q2}>")
+    for i in range(4):
+        q1[i] = q1[i] / len_q1
+        q2[i] = q2[i] / len_q2
     # q1 = q1 / len_q1
     # q2 = q2 / len_q2  ## normalized
     
@@ -299,6 +307,15 @@ def sort_depth(c2w, pts_3d, pts_color):  #pts_3d: world coordinate system
     sort_idx = np.argsort(-depth)
     sorted_pts_3d = list(pts_3d[sort_idx])
     sorted_pts_color = list(pts_color[sort_idx])
+    sorted_depth = depth[sort_idx]
+    neg_idx = -1
+    for i in range(len(sorted_pts_3d)):
+        if sorted_depth[i] < 0:  # modified to depth
+            neg_idx = i
+            break
+    if neg_idx != -1:
+        sorted_pts_3d = sorted_pts_3d[0:neg_idx]
+        sorted_pts_color = sorted_pts_color[0:neg_idx]
     return sorted_pts_3d, sorted_pts_color
 
 if __name__ == "__main__":
@@ -418,23 +435,32 @@ if __name__ == "__main__":
     # virtual_pts_3d = vertex2all(virtual_pts_3d)
     # virtual_pts_color = [(255, 0, 0) for _ in range(len(virtual_pts_3d))]
     # print("!!! the len of vpts: ", len(virtual_pts_3d))
+    # state = 0 # to prevent the mistake cases
+    iteration = 0
     for idx, c2w in tqdm(zip(IMAGE_ID_LIST, Camera2World_Transform_Matrixs), total=len(IMAGE_ID_LIST)):
         fname = (images_df.loc[images_df["IMAGE_ID"] == idx])["NAME"].values[0]
         rimg = cv2.imread(f"data/frames/{fname}", cv2.IMREAD_COLOR)
         virtual_pts_3d, virtual_pts_color = sort_depth(c2w, virtual_pts_3d, virtual_pts_color)
         # print("@@@@@@@", virtual_pts_3d, "@@@@@@@")
-        
         h, w = rimg.shape[:2]
+        cnt_inlier = 0
         for pt_3d, color in zip(virtual_pts_3d, virtual_pts_color):
+            if iteration >= 72:
+                break
             # print("@@@@@@@", color, type(color), "@@@@@@@")
             color = tuple(map(int, np.array(color).flatten()))
             p_img = world2camera2image(c2w, [pt_3d])
             p_img = p_img.reshape(-1, 2)
             for (x, y) in p_img.astype(int):
-                if 0 <= x < w and 0 <= y < h:
+                if 0 <= x < w and 0 <= y < h: # and state < 2:
                     cv2.circle(rimg, (x, y), 8, color, -1)
+                    cnt_inlier += 1
                 # else:
                     # print(f"Point {(x, y)} out of image bounds for {fname}")
+            # if (cnt_inlier != 0 and state == 0) or (cnt_inlier == 0 and state == 1):
+            #     state += 1
+            #     print(f"img_idx is {iteration}")
+        iteration += 1
         out_path = f"data/video_materials/{fname}"
         cv2.imwrite(out_path, rimg)
 
